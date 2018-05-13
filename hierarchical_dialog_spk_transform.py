@@ -107,23 +107,37 @@ encoder_major_hparams = {
     "rnn_cell_share_config": True
 }
 decoder_hparams = {
-    "num_units":400, 
+    "num_units":200, 
     "poswise_feedforward": {
+        "name": 'ffn',
         "layers": [
             {
-                "type":"Dense",
+                "type": "Dense",
                 "kwargs": {
                     "name": "conv1",
                     "units": 200,
                     "activation": 'relu',
                     "use_bias": True,
                 }
+            },
+            {
+                "type": "Dropout",
+                "kwargs": {
+                    "rate": 0.1,
+                }
+            },
+            {
+                "type": "Dense",
+                "kwargs": {
+                    "name": "conv2",
+                    "units": 200,
+                    "use_bias": True,
+                }
             }
         ],
-
-    }
+    },
+    "beam_width": 1, 
 }
-
 opt_hparams = {
     "optimizer": {
         "type": "AdamOptimizer",
@@ -176,19 +190,24 @@ def main():
         sequence_length=data_batch['source_length'],
         sequence_length_major=data_batch['source_utterance_cnt'])[:2]
 
+    ecdr_outputs = tf.concat(ecdr_outputs, axis=-1)
     ecdr_states = ecdr_states + (tf.reshape(spk_tgt, (-1, 1)), )
 
+    ecdr_outputs = 
+
     dcdr_states = connector(ecdr_states)
+    
+    from texar.core import attentions
+    uttr_padding = tf.to_float(tf.sequence_mask(
+        data_batch['source_utterance_cnt']))
+    ignore_padding = attentions.attention_bias_ignore_padding(uttr_padding)
+    encoder_decoder_attention_bias = ignore_padding
 
     # train branch
     outputs, _ = decoder(
         decoder_input=data_batch['target_text_ids'],
-        encoder_output=ecdr_outputs[0],
-        encoder_decoder_attention_bias=None)
-
-    from IPython import embed
-    embed()
-
+        encoder_output=ecdr_outputs,
+        encoder_decoder_attention_bias=encoder_decoder_attention_bias)
 
     # call decoder.trainable_variables
 
@@ -208,38 +227,15 @@ def main():
     test_batch_size = test_data.hparams.batch_size
 
     # sample inference
-    dcdr_states_tiled = tile_batch(dcdr_states, 5)
 
-    output_samples, _, sample_lengths = decoder(
-        decoding_strategy="infer_sample",
-        initial_state=dcdr_states_tiled,
-        max_decoding_length=50,
-        start_tokens=tf.cast(tf.fill(
-            tf.shape(dcdr_states_tiled)[:1], train_data.vocab(0).bos_token_id),
-            tf.int32),
-        end_token=train_data.vocab(0).eos_token_id,
-        embedding=embedder)
+    #dcdr_states_tiled = tile_batch(dcdr_states, 5)
+    output_samples = decoder.dynamic_decode(
+        ecdr_outputs, encoder_decoder_attention_bias)
+
 
     # denumericalize the generated samples
     sample_text = train_data.vocab(0).map_ids_to_tokens(
         output_samples.sample_id)
-
-    # beam search
-    beam_search_samples, beam_states = beam_search_decode(
-        decoder,
-        initial_state=tile_batch(dcdr_states, 5),
-        max_decoding_length=50,
-        start_tokens=tf.cast(tf.fill(
-            tf.shape(dcdr_states)[:1], train_data.vocab(0).bos_token_id),
-            tf.int32),
-        end_token=train_data.vocab(0).eos_token_id,
-        embedding=embedder,
-        beam_width=5
-    )
-    beam_lengths = beam_states.lengths
-
-    beam_sample_text = train_data.vocab(0).map_ids_to_tokens(
-        beam_search_samples.predicted_ids)
 
     target_tuple = (data_batch['target_text'][:, 1:],
                     data_batch['target_length'] - 1,
