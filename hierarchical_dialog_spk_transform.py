@@ -107,7 +107,7 @@ encoder_major_hparams = {
     "rnn_cell_share_config": True
 }
 decoder_hparams = {
-    "num_units":200, 
+    "num_units": 200, 
     "poswise_feedforward": {
         "name": 'ffn',
         "layers": [
@@ -136,6 +136,7 @@ decoder_hparams = {
             }
         ],
     },
+    "num_blocks": 12, 
     "beam_width": 1, 
 }
 opt_hparams = {
@@ -175,7 +176,7 @@ def main():
         embedding=embedder.embedding, 
         hparams=decoder_hparams, vocab_size=train_data.vocab(0).size)
 
-    #connector = tf.layers.Dense(decoder.cell.state_size)
+    #connector = tf.layers.Dense(decoder.cell.state_size) 
 
     connector = tx.modules.connectors.MLPTransformConnector(
         decoder.hparams.num_units)
@@ -193,12 +194,13 @@ def main():
     ecdr_outputs = tf.concat(ecdr_outputs, axis=-1)
     ecdr_states = ecdr_states + (tf.reshape(spk_tgt, (-1, 1)), )
 
-    ecdr_outputs = 
-
     dcdr_states = connector(ecdr_states)
+
+    ecdr_outputs = tf.layers.dense(
+        ecdr_outputs, 200, tf.nn.tanh, use_bias=True)
     
     from texar.core import attentions
-    uttr_padding = tf.to_float(tf.sequence_mask(
+    uttr_padding = 1. - tf.to_float(tf.sequence_mask(
         data_batch['source_utterance_cnt']))
     ignore_padding = attentions.attention_bias_ignore_padding(uttr_padding)
     encoder_decoder_attention_bias = ignore_padding
@@ -213,7 +215,7 @@ def main():
 
     mle_loss = tx.losses.sequence_sparse_softmax_cross_entropy(
         labels=data_batch['target_text_ids'][:, 1:],
-        logits=outputs,
+        logits=outputs[:, :-1],
         sequence_length=data_batch['target_length'] - 1,
         sum_over_timesteps=False,
         average_across_timesteps=True)
@@ -232,10 +234,9 @@ def main():
     output_samples = decoder.dynamic_decode(
         ecdr_outputs, encoder_decoder_attention_bias)
 
-
     # denumericalize the generated samples
     sample_text = train_data.vocab(0).map_ids_to_tokens(
-        output_samples.sample_id)
+        output_samples['sampled_ids'])
 
     target_tuple = (data_batch['target_text'][:, 1:],
                     data_batch['target_length'] - 1,
@@ -347,7 +348,7 @@ def main():
                 #samples = sess.run(sample_text, feed_dict=feed)
 
                 samples, sample_id, lengths, dialog_t, target_t, refs_t = sess.run(
-                    [sample_text, output_samples.sample_id, sample_lengths,
+                    [sample_text, output_samples['sampled_ids'], sample_lengths,
                      dialog_tuple, target_tuple, refs_tuple],
                     feed_dict=feed)
 
