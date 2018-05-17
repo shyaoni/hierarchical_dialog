@@ -82,27 +82,30 @@ data_hparams = {
     }
     for stage in ['train', 'val', 'test']
 }
-
-encoder_minor_hparams = {
-    "rnn_cell_fw": {
-        "type": "GRUCell",
-        "kwargs": {
-            "num_units": 300,
-            "kernel_initializer": tf.orthogonal_initializer(),
+encoder_hparams = {
+    "encoder_major_type": "UnidirectionalRNNEncoder",
+    "encoder_major_hparams": {
+        "rnn_cell": {
+            "type": "GRUCell",
+            "kwargs": {
+                "num_units": 600,
+                "kernel_initializer": tf.orthogonal_initializer(),
+            },
         },
-        "dropout": {
-            "input_keep_prob": 1,
-        }
     },
-    "rnn_cell_share_config": True
-}
-encoder_major_hparams = {
-    "rnn_cell": {
-        "type": "GRUCell",
-        "kwargs": {
-            "num_units": 600,
-            "kernel_initializer": tf.orthogonal_initializer(),
+    "encoder_minor_type": "BidirectionalRNNEncoder",
+    "encoder_minor_hparams": {
+        "rnn_cell_fw": {
+            "type": "GRUCell",
+            "kwargs": {
+                "num_units": 300,
+                "kernel_initializer": tf.orthogonal_initializer(),
+            },
+            "dropout": {
+                "input_keep_prob": 1,
+            }
         },
+        "rnn_cell_share_config": True
     },
 }
 decoder_hparams = {
@@ -165,12 +168,13 @@ def main():
     embedder = tx.modules.WordEmbedder(
         init_value=train_data.embedding_init_value(0).word_vecs)
 
+    """
     encoder_minor = tx.modules.BidirectionalRNNEncoder(
         hparams=encoder_minor_hparams)
     encoder_major = tx.modules.UnidirectionalRNNEncoder(
         hparams=encoder_major_hparams)
-    encoder = HierarchicalRNNEncoder(
-        encoder_major, encoder_minor)
+    """
+    encoder = HierarchicalRNNEncoder(hparams=encoder_hparams)
     encoder_medium = lambda x: tf.concat([x, tf.reshape(spk_src, (-1, 1))], 1)
 
     decoder = tx.modules.TransformerDecoder(
