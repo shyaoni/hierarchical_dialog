@@ -30,7 +30,7 @@ parser.add_argument('--stage', nargs='+',
                     default=['train', 'val', 'test'], type=str)
 parser.add_argument('--test_batch_num', default=None, type=int)
 parser.add_argument('--data_root', default='../../data/sw1c2r/', type=str)
-parser.add_argument('--save_root', default='/tmp', type=str)
+parser.add_argument('--save_root', default='./save', type=str)
 args = parser.parse_args()
 
 download_and_process(args.data_root)
@@ -97,14 +97,13 @@ encoder_minor_hparams = {
     "rnn_cell_share_config": True
 }
 encoder_major_hparams = {
-    "rnn_cell_fw": {
+    "rnn_cell": {
         "type": "GRUCell",
         "kwargs": {
             "num_units": 600,
             "kernel_initializer": tf.orthogonal_initializer(),
         },
     },
-    "rnn_cell_share_config": True
 }
 decoder_hparams = {
     "num_units": 200, 
@@ -123,7 +122,7 @@ decoder_hparams = {
             {
                 "type": "Dropout",
                 "kwargs": {
-                    "rate": 0.1,
+                    "rate": 0.3,
                 }
             },
             {
@@ -136,8 +135,10 @@ decoder_hparams = {
             }
         ],
     },
-    "num_blocks": 12, 
+    "num_blocks": 6, 
     "beam_width": 1, 
+    "sampling_method": 'sample',
+    "maximum_decode_length": 50
 }
 opt_hparams = {
     "optimizer": {
@@ -166,7 +167,7 @@ def main():
 
     encoder_minor = tx.modules.BidirectionalRNNEncoder(
         hparams=encoder_minor_hparams)
-    encoder_major = tx.modules.BidirectionalRNNEncoder(
+    encoder_major = tx.modules.UnidirectionalRNNEncoder(
         hparams=encoder_major_hparams)
     encoder = HierarchicalRNNEncoder(
         encoder_major, encoder_minor)
@@ -191,8 +192,9 @@ def main():
         sequence_length=data_batch['source_length'],
         sequence_length_major=data_batch['source_utterance_cnt'])[:2]
 
-    ecdr_outputs = tf.concat(ecdr_outputs, axis=-1)
-    ecdr_states = ecdr_states + (tf.reshape(spk_tgt, (-1, 1)), )
+    #ecdr_outputs = tf.concat(ecdr_outputs, axis=-1)
+
+    ecdr_states = (ecdr_states, ) + (tf.reshape(spk_tgt, (-1, 1)), )
 
     dcdr_states = connector(ecdr_states)
 
@@ -231,12 +233,13 @@ def main():
     # sample inference
 
     #dcdr_states_tiled = tile_batch(dcdr_states, 5)
-    output_samples = decoder.dynamic_decode(
-        ecdr_outputs, encoder_decoder_attention_bias)
+    output_samples = [decoder.dynamic_decode(
+        ecdr_outputs, encoder_decoder_attention_bias)['sampled_ids']
+        for i in range(5)]
 
     # denumericalize the generated samples
-    sample_text = train_data.vocab(0).map_ids_to_tokens(
-        output_samples['sampled_ids'])
+    sample_text = [train_data.vocab(0).map_ids_to_tokens(
+        output_sample) for output_sample in output_samples]
 
     target_tuple = (data_batch['target_text'][:, 1:],
                     data_batch['target_length'] - 1,
@@ -347,15 +350,26 @@ def main():
 
                 #samples = sess.run(sample_text, feed_dict=feed)
 
-                samples, sample_id, lengths, dialog_t, target_t, refs_t = sess.run(
-                    [sample_text, output_samples['sampled_ids'], sample_lengths,
+                output, samples, sample_id, dialog_t, target_t, refs_t = sess.run(
+                    [outputs, sample_text, output_samples,
                      dialog_tuple, target_tuple, refs_tuple],
                     feed_dict=feed)
 
+                max_length = max(x.shape[2] for x in samples)
+                samples = np.concatenate([np.pad(
+                    x, ((0, 0), (0, 0), (0, max_length - x.shape[2])), 'constant')
+                    for x in samples], axis=1)
+
+                sample_id = np.concatenate([np.pad(
+                    x, ((0, 0), (0, 0), (0, max_length - x.shape[2])), 'constant')
+                    for x in sample_id], axis=1)
+
                 #if sample inference used
-                samples = samples.reshape(-1, 5, *samples.shape[1:]).transpose(0, 2, 1)
-                sample_id = sample_id.reshape(-1, 5, *sample_id.shape[1:]).transpose(0, 2, 1)
-                lengths = lengths.reshape(-1, 5, *lengths.shape[1:])
+                samples = samples.transpose(0, 2, 1)
+                sample_id = sample_id.transpose(0, 2, 1)
+
+                lengths = np.array(
+                    [[(sample_id[j, :, i].tolist() + [2]).index(2) + 1 for j in range(sample_id.shape[0])] for i in range(5)]).transpose()
 
                 for (beam, beam_len, beam_ids,
                      dialog, utts_len, utts_cnt,
@@ -438,7 +452,7 @@ def main():
             epoch, As_recall, As_prec, Es_recall, Es_prec)) 
 
         for i in range(1, 5):
-            print('BLEU-{} prec={}, BLEU-{} recall={}'.format(i, bleu_prec[i-1], i, bleu_recall[i-1]/1.9)) 
+            print('BLEU-{} prec={}, BLEU-{} recall={}'.format(i, bleu_prec[i-1], i, bleu_recall[i-1])) 
 
         with open('test_txt_results.txt', 'w') as f:
             f.write('\n\n'.join(txt_results))
